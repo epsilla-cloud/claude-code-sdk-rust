@@ -10,6 +10,7 @@ use crate::{
     errors::ClaudeSDKError,
     transport::{subprocess_cli::SubprocessCLITransport, Transport},
     types::*,
+    SafetyLimits,
 };
 
 /// Internal client implementation
@@ -33,9 +34,11 @@ impl InternalClient {
         let transport = SubprocessCLITransport::new(prompt, options, None)?;
         debug!("Created subprocess CLI transport");
 
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let safety_limits = SafetyLimits::default();
+        let channel_size = safety_limits.max_buffered_messages.min(1000); // Cap at 1000 for safety
+        let (tx, rx) = tokio::sync::mpsc::channel(channel_size);
         let stream = ReceiverStream::new(rx);
-        debug!("Created message channel with buffer size 100");
+        debug!(channel_size, "Created message channel with safety-limited buffer size");
 
         tokio::spawn(async move {
             let span = span!(Level::DEBUG, "transport_task");

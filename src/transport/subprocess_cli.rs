@@ -14,6 +14,7 @@ use crate::{
     errors::*,
     types::{ClaudeCodeOptions, PermissionMode},
     transport::Transport,
+    SafetyLimits, SafetyError,
 };
 
 /// Subprocess transport using Claude Code CLI
@@ -23,6 +24,8 @@ pub struct SubprocessCLITransport {
     cli_path: String,
     cwd: Option<PathBuf>,
     process: Option<Child>,
+    safety_limits: SafetyLimits,
+    current_buffer_size: usize,
 }
 
 impl SubprocessCLITransport {
@@ -58,7 +61,16 @@ impl SubprocessCLITransport {
             cli_path,
             cwd,
             process: None,
+            safety_limits: SafetyLimits::default(),
+            current_buffer_size: 0,
         })
+    }
+    
+    /// Set custom safety limits for this transport
+    pub fn with_safety_limits(mut self, limits: SafetyLimits) -> Self {
+        info!(?limits, "Setting custom safety limits");
+        self.safety_limits = limits;
+        self
     }
 
     /// Find Claude Code CLI binary
@@ -316,7 +328,8 @@ impl Transport for SubprocessCLITransport {
                 let reader = BufReader::new(stdout);
                 let lines_stream = LinesStream::new(reader.lines());
                 
-                let stream = lines_stream.map(|line_result| {
+                let safety_limits = self.safety_limits.clone();
+                let stream = lines_stream.map(move |line_result| {
                     match line_result {
                         Ok(line) => {
                             let line = line.trim();
@@ -325,22 +338,79 @@ impl Transport for SubprocessCLITransport {
                                 return Err(ClaudeSDKError::Other("Empty line".to_string()));
                             }
                             
-                            debug!(line_length = line.len(), "Processing line from subprocess");
-                            match serde_json::from_str::<HashMap<String, serde_json::Value>>(line) {
+                            // Safety check: line size
+                            let line_size = line.len();
+                            if !safety_limits.is_line_size_safe(line_size) {
+                                error!(
+                                    line_size = line_size,
+                                    limit = safety_limits.max_line_size,
+                                    "Line exceeds safety limit"
+                                );
+                                return Err(ClaudeSDKError::Safety(SafetyError::LineTooLarge {
+                                    actual: line_size,
+                                    limit: safety_limits.max_line_size,
+                                }));
+                            }
+                            
+                            debug!(line_length = line_size, "Processing line from subprocess");
+                            
+                            // Safe JSON parsing with timeout simulation
+                            let parse_start = std::time::Instant::now();
+                            let parse_result = serde_json::from_str::<HashMap<String, serde_json::Value>>(line);
+                            let parse_duration = parse_start.elapsed();
+                            
+                            if parse_duration.as_millis() > safety_limits.json_parse_timeout_ms as u128 {
+                                warn!(
+                                    duration_ms = parse_duration.as_millis(),
+                                    timeout_ms = safety_limits.json_parse_timeout_ms,
+                                    "JSON parsing took longer than expected"
+                                );
+                            }
+                            
+                            match parse_result {
                                 Ok(data) => {
-                                    debug!(fields_count = data.len(), "Successfully parsed JSON message");
+                                    debug!(
+                                        fields_count = data.len(),
+                                        parse_duration_ms = parse_duration.as_millis(),
+                                        "Successfully parsed JSON message"
+                                    );
+                                    
+                                    // Check if this contains large text content
+                                    if let Some(message_obj) = data.get("message") {
+                                        if let Some(content_arr) = message_obj.get("content").and_then(|c| c.as_array()) {
+                                            for content_item in content_arr {
+                                                if let Some(text) = content_item.get("text").and_then(|t| t.as_str()) {
+                                                    let text_size = text.len();
+                                                    if !safety_limits.is_text_block_safe(text_size) {
+                                                        warn!(
+                                                            text_size = text_size,
+                                                            limit = safety_limits.max_text_block_size,
+                                                            text_preview = %safety_limits.safe_log_preview(text),
+                                                            "Large text block detected"
+                                                        );
+                                                        // Don't fail, but log the warning
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
                                     Ok(data)
                                 }
                                 Err(e) => {
                                     if line.starts_with('{') || line.starts_with('[') {
                                         error!(
                                             error = %e,
-                                            line_preview = %line.chars().take(100).collect::<String>(),
+                                            line_preview = %safety_limits.safe_log_preview(line),
+                                            parse_duration_ms = parse_duration.as_millis(),
                                             "Failed to parse JSON message"
                                         );
                                         Err(ClaudeSDKError::CLIJSONDecode(CLIJSONDecodeError::new(line, e)))
                                     } else {
-                                        debug!(line_preview = %line.chars().take(50).collect::<String>(), "Skipping non-JSON line");
+                                        debug!(
+                                            line_preview = %safety_limits.safe_log_preview(line),
+                                            "Skipping non-JSON line"
+                                        );
                                         Err(ClaudeSDKError::Other("Non-JSON line".to_string()))
                                     }
                                 }

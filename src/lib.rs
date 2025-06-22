@@ -20,11 +20,13 @@ use tracing::{debug, info, instrument};
 
 pub mod types;
 pub mod errors;
+pub mod config;
 mod client;
 mod transport;
 
 pub use types::*;
 pub use errors::*;
+pub use config::*;
 
 use client::InternalClient;
 

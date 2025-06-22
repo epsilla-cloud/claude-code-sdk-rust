@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 use tracing::error;
+use crate::config::SafetyError;
 
 /// Base error type for all Claude SDK errors
 #[derive(Error, Debug)]
@@ -20,6 +21,9 @@ pub enum ClaudeSDKError {
     
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    
+    #[error("Safety limit violation: {0}")]
+    Safety(#[from] SafetyError),
     
     #[error("Other error: {0}")]
     Other(String),

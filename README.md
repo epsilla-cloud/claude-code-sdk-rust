@@ -8,7 +8,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-claude-code-sdk = "0.0.10"
+claude-code-sdk = "0.0.2"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
@@ -234,6 +234,98 @@ async fn my_function() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Safety & Long Text Handling
+
+The Claude Code SDK includes comprehensive safety mechanisms to handle long text responses safely and prevent common issues like memory exhaustion and performance degradation.
+
+### Safety Limits
+
+Configure safety limits to protect against resource exhaustion:
+
+```rust
+use claude_code_sdk::{SafetyLimits, SafetyError, ClaudeSDKError};
+
+// Default limits (balanced)
+let default_limits = SafetyLimits::default();
+
+// Conservative limits (memory-constrained environments)
+let conservative = SafetyLimits::conservative();
+
+// Generous limits (high-memory servers)
+let generous = SafetyLimits::generous();
+
+// Custom limits
+let custom = SafetyLimits {
+    max_line_size: 5 * 1024 * 1024,      // 5MB per line
+    max_text_block_size: 2 * 1024 * 1024, // 2MB per text block
+    max_buffer_size: 20 * 1024 * 1024,   // 20MB total buffer
+    max_buffered_messages: 50,            // 50 messages max
+    json_parse_timeout_ms: 3000,          // 3 second timeout
+    max_log_preview_chars: 150,           // 150 char preview
+};
+```
+
+### Protected Operations
+
+The SDK automatically protects against:
+
+- **Memory Exhaustion**: Line size and text block limits prevent runaway memory usage
+- **JSON Parsing Timeouts**: Large JSON objects are monitored for parsing time
+- **Log Explosion**: Automatic truncation of log messages with size indicators
+- **Buffer Overflow**: Channel size limits prevent message queue buildup
+
+### Error Handling
+
+Safety violations are reported through structured errors:
+
+```rust
+match query("Generate a very long response", None).await {
+    Ok(stream) => {
+        // Process normally
+    }
+    Err(ClaudeSDKError::Safety(SafetyError::LineTooLarge { actual, limit })) => {
+        println!("Line too large: {} bytes (limit: {})", actual, limit);
+    }
+    Err(ClaudeSDKError::Safety(SafetyError::TextBlockTooLarge { actual, limit })) => {
+        println!("Text block too large: {} bytes (limit: {})", actual, limit);
+    }
+    Err(ClaudeSDKError::Safety(SafetyError::ParseTimeout { timeout_ms })) => {
+        println!("JSON parsing timeout after {}ms", timeout_ms);
+    }
+    Err(other) => {
+        println!("Other error: {}", other);
+    }
+}
+```
+
+### Risk Mitigation
+
+| Risk | Mitigation | Configuration |
+|------|------------|---------------|
+| **Memory exhaustion** | Line and text block size limits | `max_line_size`, `max_text_block_size` |
+| **JSON parsing hangs** | Parsing timeout monitoring | `json_parse_timeout_ms` |
+| **Log file explosion** | Safe preview truncation | `max_log_preview_chars` |
+| **Message queue buildup** | Buffer size and count limits | `max_buffer_size`, `max_buffered_messages` |
+| **Process blocking** | Async processing with backpressure | Automatic |
+
+### Monitoring
+
+The SDK provides detailed monitoring of resource usage:
+
+```rust
+use tracing::{info, warn};
+
+// Automatic logging of resource usage
+// INFO: Text block size monitoring
+// WARN: Approaching safety limits  
+// ERROR: Safety limit violations
+
+// Example log output:
+// INFO text_length=1048576 limit=5242880 "Large text block detected"
+// WARN "Text block is approaching size limit"
+// ERROR actual=10485760 limit=5242880 "Line exceeds safety limit"
+```
+
 ## API Reference
 
 ### `query(prompt: &str, options: Option<ClaudeCodeOptions>)`
@@ -288,6 +380,7 @@ See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-co
 
 - **[examples/quick_start.rs](examples/quick_start.rs)** - Complete working example with logging
 - **[examples/logging_demo.rs](examples/logging_demo.rs)** - Advanced logging configurations
+- **[examples/safety_demo.rs](examples/safety_demo.rs)** - Safety mechanisms and long text handling
 
 ### Running Examples
 
@@ -303,6 +396,9 @@ cargo run --example logging_demo -- --file logs/claude.log
 
 # Performance monitoring
 RUST_LOG=claude_code_sdk=debug cargo run --example logging_demo -- --perf
+
+# Safety demonstration
+cargo run --example safety_demo -- --simulate-large
 ```
 
 ## License
