@@ -8,7 +8,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-claude-code-sdk = "0.0.2"
+claude-code-sdk = "0.0.3"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
