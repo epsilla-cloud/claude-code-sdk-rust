@@ -22,9 +22,12 @@ thiserror = "1.0"
 which = "6.0"
 home = "0.5"
 async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "chrono"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+tracing-test = "0.2"
 
 [lib]
 name = "claude_code_sdk"

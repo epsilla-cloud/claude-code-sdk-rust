@@ -1,6 +1,7 @@
 //! Error types for Claude SDK.
 
 use thiserror::Error;
+use tracing::error;
 
 /// Base error type for all Claude SDK errors
 #[derive(Error, Debug)]
@@ -33,8 +34,10 @@ pub struct CLIConnectionError {
 
 impl CLIConnectionError {
     pub fn new(message: impl Into<String>) -> Self {
+        let message_str = message.into();
+        error!(message = %message_str, "CLI connection error occurred");
         Self {
-            message: message.into(),
+            message: message_str,
         }
     }
 }
@@ -49,16 +52,24 @@ pub struct CLINotFoundError {
 
 impl CLINotFoundError {
     pub fn new(message: impl Into<String>) -> Self {
+        let message_str = message.into();
+        error!(message = %message_str, "Claude CLI not found");
         Self {
-            message: message.into(),
+            message: message_str,
             cli_path: None,
         }
     }
     
     pub fn with_path(message: impl Into<String>, cli_path: impl Into<String>) -> Self {
         let cli_path_string = cli_path.into();
+        let message_str = message.into();
+        error!(
+            message = %message_str,
+            cli_path = %cli_path_string,
+            "Claude CLI not found at specified path"
+        );
         Self {
-            message: format!("{}: {}", message.into(), cli_path_string),
+            message: format!("{}: {}", message_str, cli_path_string),
             cli_path: Some(cli_path_string),
         }
     }
@@ -74,26 +85,42 @@ pub struct ProcessError {
 
 impl ProcessError {
     pub fn new(message: impl Into<String>) -> Self {
+        let message_str = message.into();
+        error!(message = %message_str, "Process error occurred");
         Self {
-            message: message.into(),
+            message: message_str,
             exit_code: None,
             stderr: None,
         }
     }
     
     pub fn with_exit_code(message: impl Into<String>, exit_code: i32) -> Self {
+        let message_str = message.into();
+        error!(
+            message = %message_str,
+            exit_code = exit_code,
+            "Process error with exit code"
+        );
         Self {
-            message: message.into(),
+            message: message_str,
             exit_code: Some(exit_code),
             stderr: None,
         }
     }
     
     pub fn with_stderr(message: impl Into<String>, exit_code: Option<i32>, stderr: impl Into<String>) -> Self {
+        let message_str = message.into();
+        let stderr_str = stderr.into();
+        error!(
+            message = %message_str,
+            exit_code = exit_code,
+            stderr_preview = %stderr_str.chars().take(200).collect::<String>(),
+            "Process error with stderr output"
+        );
         Self {
-            message: message.into(),
+            message: message_str,
             exit_code,
-            stderr: Some(stderr.into()),
+            stderr: Some(stderr_str),
         }
     }
 }
@@ -123,8 +150,14 @@ pub struct CLIJSONDecodeError {
 
 impl CLIJSONDecodeError {
     pub fn new(line: impl Into<String>, original_error: serde_json::Error) -> Self {
+        let line_str = line.into();
+        error!(
+            line_preview = %line_str.chars().take(100).collect::<String>(),
+            parse_error = %original_error,
+            "Failed to decode JSON from CLI output"
+        );
         Self {
-            line: line.into(),
+            line: line_str,
             original_error,
         }
     }

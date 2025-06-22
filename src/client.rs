@@ -4,6 +4,7 @@ use futures::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tracing::{debug, error, info, warn, instrument, span, Level};
 
 use crate::{
     errors::ClaudeSDKError,
@@ -21,20 +22,30 @@ impl InternalClient {
     }
 
     /// Process a query through transport
+    #[instrument(level = "debug", skip(self, prompt, options))]
     pub async fn process_query(
         &self,
         prompt: &str,
         options: ClaudeCodeOptions,
     ) -> Result<Pin<Box<dyn Stream<Item = Message> + Send>>, ClaudeSDKError> {
+        info!("Processing query through transport");
+        
         let transport = SubprocessCLITransport::new(prompt, options, None)?;
+        debug!("Created subprocess CLI transport");
 
         let (tx, rx) = tokio::sync::mpsc::channel(100);
         let stream = ReceiverStream::new(rx);
+        debug!("Created message channel with buffer size 100");
 
         tokio::spawn(async move {
+            let span = span!(Level::DEBUG, "transport_task");
+            let _enter = span.enter();
+            
             let mut transport = transport;
+            debug!("Starting transport connection");
             
             if let Err(e) = transport.connect().await {
+                error!(error = %e, "Failed to connect to transport");
                 let _ = tx.send(Message::Result(ResultMessage {
                     subtype: "error".to_string(),
                     duration_ms: 0,
@@ -48,20 +59,32 @@ impl InternalClient {
                 })).await;
                 return;
             }
+            
+            info!("Successfully connected to transport");
 
             {
                 let mut message_stream = transport.receive_messages();
+                let mut message_count = 0u64;
                 
+                debug!("Starting message stream processing");
                 while let Some(data_result) = message_stream.next().await {
                     match data_result {
                         Ok(data) => {
+                            debug!(message_count, "Received raw message data");
                             if let Some(message) = Self::parse_message(data) {
+                                message_count += 1;
+                                debug!(message_count, message_type = ?std::mem::discriminant(&message), "Parsed message");
+                                
                                 if tx.send(message).await.is_err() {
+                                    warn!("Receiver dropped, stopping message processing");
                                     break; // Receiver dropped
                                 }
+                            } else {
+                                warn!("Failed to parse message data");
                             }
                         }
                         Err(e) => {
+                            error!(error = %e, "Error receiving message from transport");
                             let error_message = Message::Result(ResultMessage {
                                 subtype: "error".to_string(),
                                 duration_ms: 0,
@@ -78,17 +101,26 @@ impl InternalClient {
                         }
                     }
                 }
+                
+                info!(message_count, "Finished processing message stream");
             } // Drop message_stream here
 
-            let _ = transport.disconnect().await;
+            debug!("Disconnecting from transport");
+            if let Err(e) = transport.disconnect().await {
+                warn!(error = %e, "Error during transport disconnect");
+            } else {
+                debug!("Successfully disconnected from transport");
+            }
         });
 
         Ok(Box::pin(stream))
     }
 
     /// Parse message from CLI output, trusting the structure
+    #[instrument(level = "trace", skip(data))]
     fn parse_message(data: HashMap<String, serde_json::Value>) -> Option<Message> {
         let message_type = data.get("type")?.as_str()?;
+        debug!(message_type, "Parsing message");
 
         match message_type {
             "user" => {
@@ -97,6 +129,7 @@ impl InternalClient {
                     .get("content")?
                     .as_str()?
                     .to_string();
+                debug!(content_length = content.len(), "Parsed user message");
                 Some(Message::User(UserMessage { content }))
             }
             "assistant" => {
@@ -152,6 +185,7 @@ impl InternalClient {
                     }
                 }
                 
+                debug!(content_blocks = content_blocks.len(), "Parsed assistant message");
                 Some(Message::Assistant(AssistantMessage {
                     content: content_blocks,
                 }))
@@ -160,6 +194,7 @@ impl InternalClient {
                 let subtype = data.get("subtype")?.as_str()?.to_string();
                 let data_map: HashMap<String, serde_json::Value> = data.into_iter().collect();
                 
+                debug!(subtype = %subtype, "Parsed system message");
                 Some(Message::System(SystemMessage {
                     subtype,
                     data: data_map,
@@ -178,6 +213,16 @@ impl InternalClient {
                 });
                 let result = data.get("result").and_then(|v| v.as_str().map(|s| s.to_string()));
                 
+                debug!(
+                    subtype = %subtype,
+                    duration_ms,
+                    duration_api_ms,
+                    is_error,
+                    num_turns,
+                    session_id = %session_id,
+                    total_cost_usd,
+                    "Parsed result message"
+                );
                 Some(Message::Result(ResultMessage {
                     subtype,
                     duration_ms,
@@ -190,7 +235,10 @@ impl InternalClient {
                     result,
                 }))
             }
-            _ => None,
+            _ => {
+                warn!(message_type, "Unknown message type");
+                None
+            }
         }
     }
 } 

@@ -25,6 +25,9 @@ use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Optional: Initialize logging to see detailed SDK operations
+    claude_code_sdk::init_tracing();
+    
     let mut stream = query("What is 2 + 2?", None).await?;
     
     while let Some(message) = stream.next().await {
@@ -97,6 +100,140 @@ let options = ClaudeCodeOptions {
 };
 ```
 
+## Logging
+
+The Claude Code SDK provides comprehensive structured logging using the [`tracing`](https://tracing.rs/) ecosystem. This helps with debugging, monitoring, and understanding SDK operations.
+
+### Quick Setup
+
+```rust
+use claude_code_sdk;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize default logging
+    claude_code_sdk::init_tracing();
+    
+    // Your code here...
+    Ok(())
+}
+```
+
+### Environment Variables
+
+Control logging levels with the `RUST_LOG` environment variable:
+
+```bash
+# Show info and above (default)
+RUST_LOG=claude_code_sdk=info cargo run
+
+# Show debug messages (recommended for development)
+RUST_LOG=claude_code_sdk=debug cargo run
+
+# Show all messages including trace
+RUST_LOG=claude_code_sdk=trace cargo run
+
+# Show only errors
+RUST_LOG=claude_code_sdk=error cargo run
+
+# Multiple modules
+RUST_LOG=claude_code_sdk=debug,tokio=info cargo run
+```
+
+### Custom Logging Setup
+
+For more control over logging, set up `tracing-subscriber` directly:
+
+```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+// JSON structured logging
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::new("claude_code_sdk=debug"))
+    .with(tracing_subscriber::fmt::layer().json())
+    .init();
+
+// Custom formatting
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::new("claude_code_sdk=debug"))
+    .with(
+        tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_file(true)
+            .with_line_number(true)
+            .pretty()
+    )
+    .init();
+
+// File logging
+let file = std::fs::OpenOptions::new()
+    .create(true)
+    .write(true)
+    .truncate(true)
+    .open("claude_sdk.log")?;
+
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::new("claude_code_sdk=trace"))
+    .with(tracing_subscriber::fmt::layer().with_writer(file))
+    .init();
+```
+
+### What Gets Logged
+
+The SDK logs various operations at different levels:
+
+- **ERROR**: CLI not found, connection failures, JSON decode errors
+- **WARN**: Process termination issues, unexpected states
+- **INFO**: Query start/completion, connection events, major operations
+- **DEBUG**: Message processing, command building, subprocess management
+- **TRACE**: Individual message parsing, detailed state changes
+
+### Log Fields
+
+Structured logs include useful fields:
+
+```json
+{
+  "timestamp": "2024-01-01T12:00:00.000Z",
+  "level": "INFO",
+  "target": "claude_code_sdk::client",
+  "message": "Processing query through transport",
+  "fields": {
+    "prompt_length": 25,
+    "has_options": true,
+    "system_prompt": "You are helpful",
+    "allowed_tools": 2,
+    "permission_mode": "AcceptEdits"
+  }
+}
+```
+
+### Performance Monitoring
+
+Enable performance monitoring with tracing spans:
+
+```rust
+use tracing::{info, Instrument};
+
+async fn my_function() -> Result<(), Box<dyn std::error::Error>> {
+    let span = tracing::info_span!("my_operation", operation_type = "query");
+    
+    async move {
+        let start = std::time::Instant::now();
+        
+        // Your Claude SDK operations here
+        let mut stream = query("Hello", None).await?;
+        // ... process stream
+        
+        info!(duration_ms = start.elapsed().as_millis(), "Operation completed");
+        Ok(())
+    }
+    .instrument(span)
+    .await
+}
+```
+
 ## API Reference
 
 ### `query(prompt: &str, options: Option<ClaudeCodeOptions>)`
@@ -149,7 +286,24 @@ See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-co
 
 ## Examples
 
-See [examples/quick_start.rs](examples/quick_start.rs) for a complete working example.
+- **[examples/quick_start.rs](examples/quick_start.rs)** - Complete working example with logging
+- **[examples/logging_demo.rs](examples/logging_demo.rs)** - Advanced logging configurations
+
+### Running Examples
+
+```bash
+# Basic example with default logging
+cargo run --example quick_start
+
+# Advanced logging demo with JSON output
+cargo run --example logging_demo -- --json
+
+# File logging
+cargo run --example logging_demo -- --file logs/claude.log
+
+# Performance monitoring
+RUST_LOG=claude_code_sdk=debug cargo run --example logging_demo -- --perf
+```
 
 ## License
 
