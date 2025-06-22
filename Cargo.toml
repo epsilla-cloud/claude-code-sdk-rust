@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-sdk"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "Rust SDK for Claude Code"
 readme = "README.md"
